@@ -1,0 +1,29 @@
+{
+  "_comment": "Edit this file to change how departments map to the 5 categories. Departments not listed here will be flagged 'Uncategorized'.",
+  "categories": ["Residential", "Commercial", "Service", "Roofing", "Executive"],
+  "department_to_category": {
+    "Residential Engineering": "Residential",
+    "Residential Installation": "Residential",
+    "Residential Sales": "Residential",
+    "Finance": "Residential",
+    "Maintenance": "Residential",
+    "Information Systems": "Residential",
+    "Human Resources": "Residential",
+    "Marketing": "Residential",
+    "Operations": "Residential",
+    "Processing": "Residential",
+    "Procurement": "Residential",
+    "Lead Qualification": "Residential",
+    "Corporate Office": "Residential",
+    "Warehouse": "Residential",
+    "Commercial": "Commercial",
+    "Commercial Engineering": "Commercial",
+    "Commercial Installation": "Commercial",
+    "Commercial Project Management": "Commercial",
+    "Commercial Sales": "Commercial",
+    "Service Field": "Service",
+    "Service Office": "Service",
+    "Roofing": "Roofing",
+    "Executive Office": "Executive"
+  }
+}

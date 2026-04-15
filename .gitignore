@@ -1,0 +1,28 @@
+# Protect credentials — NEVER commit a config.json with real Salesforce password/token.
+# If you want to track your actual config locally, use a separate path or run `git update-index --assume-unchanged config.json`.
+config.local.json
+*.env
+.env
+
+# Python runtime
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller outputs
+build/
+dist/
+*.spec
+
+# App outputs
+reports/
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

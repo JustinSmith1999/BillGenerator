@@ -1,0 +1,19 @@
+{
+  "_comment": "Salesforce + app settings. Fill in credentials before first run. The security token is emailed by Salesforce when you reset it under Settings > My Personal Information > Reset My Security Token.",
+  "salesforce": {
+    "instance_url": "https://sunation.lightning.force.com",
+    "username": "",
+    "password": "",
+    "security_token": "",
+    "domain": "login",
+    "report_id": "00OUX000006He412AC",
+    "api_version": "60.0"
+  },
+  "employee_list_path": "data/employees.xlsx",
+  "employee_name_column": "HR: Employee Name",
+  "employee_department_column": "Department",
+  "fuzzy_match_threshold": 85,
+  "output_folder": "",
+  "_output_folder_note": "Leave empty to default to <User Documents>/BillCategorizer/reports — safest for USB-portable installs. Set to an absolute path or a relative path to override.",
+  "refresh_mode": "on_demand"
+}
