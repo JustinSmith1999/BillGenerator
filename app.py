@@ -289,6 +289,12 @@ class App:
     def _parse_worker(self, path: str) -> None:
         try:
             lines = parse_bill(path)
+            # If the bill has phone-bearing lines, use ONLY those.
+            # Non-phone lines on phone bills are noise (headers, subtotals,
+            # promo text) that inflate the total and go Uncategorized.
+            phone_lines = [ln for ln in lines if getattr(ln, "phone", None)]
+            if phone_lines:
+                lines = phone_lines
             bill = self._categorize(os.path.basename(path), lines)
             self.current_bill = bill
             self.root.after(0, self._render_bill)
