@@ -31,6 +31,7 @@ from tkinter import (
 )
 from tkinter import Text as TkText
 from tkinter import PhotoImage, Label as TkLabel
+from typing import Optional
 
 try:
     from PIL import Image, ImageTk  # Pillow gives us PNG resizing support
@@ -41,7 +42,8 @@ except ImportError:
 from bill_parser import BillLine, parse_bill
 from categorizer import CategoryMap, UNCATEGORIZED
 from ee_matcher import EEMatcher
-from exporters import CategorizedBill, LineResult, export_excel, export_pdf
+from phone_matcher import PhoneMatcher
+from exporters import CategorizedBill, LineResult, export_excel, export_pdf, export_ap_analysis
 
 try:
     # tkinterdnd2 gives us real drag-and-drop on Windows.
@@ -54,6 +56,19 @@ except ImportError:
 
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+import re as _re
+
+_HOTSPOT_RE = _re.compile(r"(?i)hot\s*spot\s*#?\s*(\d+)")
+
+
+def _hotspot_override(name: str, default_category: str) -> str:
+    """HotSpot 1-10 → Commercial, HotSpot 11+ → Residential."""
+    m = _HOTSPOT_RE.search(name)
+    if not m:
+        return default_category
+    num = int(m.group(1))
+    return "Commercial" if 1 <= num <= 10 else "Residential"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 CATEGORY_MAP_PATH = os.path.join(APP_DIR, "category_map.json")
 
@@ -88,6 +103,17 @@ class App:
             dept_col=self.config.get("employee_department_column", "Department"),
             threshold=int(self.config.get("fuzzy_match_threshold", 85)),
         )
+        # Optional: phone-number lookup (for phone bills etc.). If the file is
+        # missing we simply skip phone matching — name matching still works.
+        self.phones: PhoneMatcher | None = None
+        phone_list_path = self.config.get("phone_list_path", "data/line_list.xlsx")
+        if phone_list_path:
+            full = self._resolve_path(phone_list_path)
+            if os.path.exists(full):
+                try:
+                    self.phones = PhoneMatcher(full)
+                except Exception as e:
+                    print(f"Warning: could not load phone list: {e}")
 
         self.current_bill: CategorizedBill | None = None
         self.status_var = StringVar(value=f"Loaded {len(self.ee.employees)} employees from local list.")
@@ -267,14 +293,31 @@ class App:
             self.current_bill = bill
             self.root.after(0, self._render_bill)
             matched = sum(1 for ln in bill.lines if ln.matched_name)
+
+            # Auto-save the AP Phone Line Analysis every time a bill is loaded.
+            ap_path = self._auto_save_ap_analysis(bill)
+
             self._set_status(
                 f"Parsed {len(bill.lines)} lines — {matched} matched, "
-                f"{len(bill.lines) - matched} unmatched. Grand total ${bill.grand_total():,.2f}."
+                f"{len(bill.lines) - matched} unmatched. Grand total ${bill.grand_total():,.2f}. "
+                f"AP analysis saved to {ap_path}"
             )
         except Exception as e:
             traceback.print_exc()
             messagebox.showerror("Parse error", str(e))
             self._set_status(f"Parse failed: {e}")
+
+    def _auto_save_ap_analysis(self, bill: CategorizedBill) -> str:
+        """Auto-generate the AP Phone Line Analysis XLSX into the output folder."""
+        out_dir = self._resolve_output_dir()
+        os.makedirs(out_dir, exist_ok=True)
+        # Name it after the bill source for easy identification.
+        safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in bill.bill_name)
+        safe_name = safe_name.replace(" ", "_")[:80]
+        filename = f"AP_PhoneLine_Analysis_{safe_name}.xlsx"
+        ap_path = os.path.join(out_dir, filename)
+        export_ap_analysis(bill, ap_path)
+        return ap_path
 
     def on_rerun(self) -> None:
         if self.current_bill is None:
@@ -290,19 +333,60 @@ class App:
         self._render_bill()
 
     def _categorize(self, bill_name: str, lines) -> CategorizedBill:
-        # Accept either BillLine or LineResult-ish objects.
+        """Match bill lines to employees and categorize.
+
+        Matching chain (EE list is master source of truth for department):
+          1. If the line has a PHONE number, look it up in the T-Mobile line
+             list to get a name, then match that name against the EE list.
+             Use the EE list's department — even if the line list disagrees.
+          2. If phone lookup fails or the name it gave doesn't match anyone in
+             the EE list, fall back to the line list's own department (lower
+             confidence — flagged by score 60 instead of 100).
+          3. If there's no phone, fall back to name-on-the-line matching.
+        """
         results: list[LineResult] = []
         for ln in lines:
             name_raw = getattr(ln, "name", None)
             amount = getattr(ln, "amount", None)
+            phone = getattr(ln, "phone", None)
             raw = getattr(ln, "raw", "")
-            emp = None
+
+            matched_name: Optional[str] = None
+            dept: Optional[str] = None
             score = 0
-            if name_raw:
-                emp, score = self.ee.match(name_raw)
-            matched_name = emp.name if emp else None
-            dept = emp.department if emp else None
+
+            # --- Step 1: phone -> line list -> EE list ---
+            if phone and self.phones is not None:
+                phone_line = self.phones.lookup(phone)
+                if phone_line:
+                    # Try to find this person in the master EE list.
+                    emp, ee_score = self.ee.match(phone_line.name)
+                    if emp:
+                        matched_name = emp.name
+                        dept = emp.department  # EE list wins
+                        score = max(90, ee_score)  # phone + EE match is high confidence
+                    else:
+                        # Known phone but the user isn't in the EE list
+                        # (e.g. "Resi Site Eval #1", or a former employee).
+                        # Fall back to the line list's own department.
+                        matched_name = phone_line.name
+                        dept = phone_line.department or None
+                        score = 60  # medium confidence
+
+            # --- Step 2: no phone match, try the name-on-the-line ---
+            if dept is None and name_raw:
+                emp, ee_score = self.ee.match(name_raw)
+                if emp:
+                    matched_name = emp.name
+                    dept = emp.department
+                    score = ee_score
+
             category = self.category_map.categorize(dept) if dept else UNCATEGORIZED
+
+            # HotSpot override: 1-10 → Commercial, 11+ → Residential.
+            if matched_name:
+                category = _hotspot_override(matched_name, category)
+
             results.append(
                 LineResult(
                     raw=raw,
@@ -328,10 +412,8 @@ class App:
             return
 
         totals = self.current_bill.totals()
-        ordered = list(self.current_bill.categories) + [
-            k for k in totals if k not in self.current_bill.categories
-        ]
-        for cat in ordered:
+        overhead = totals.pop("_overhead_split", 0.0)
+        for cat in self.current_bill.categories:
             self.totals_tree.insert(
                 "", "end", text=cat, values=(f"${totals.get(cat, 0.0):,.2f}",)
             )
@@ -339,6 +421,11 @@ class App:
             "", "end", text="— Grand total —",
             values=(f"${self.current_bill.grand_total():,.2f}",),
         )
+        if overhead:
+            self.totals_tree.insert(
+                "", "end", text="  (incl. overhead split)",
+                values=(f"${overhead:,.2f} ÷ {len(self.current_bill.categories)}",),
+            )
 
         for ln in self.current_bill.lines:
             self.lines_tree.insert(

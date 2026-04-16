@@ -38,7 +38,8 @@ class CategorizedBill:
     lines: List[LineResult]
     categories: List[str]
 
-    def totals(self) -> Dict[str, float]:
+    def raw_totals(self) -> Dict[str, float]:
+        """Totals before the even-split of uncategorized charges."""
         t = {c: 0.0 for c in self.categories}
         t.setdefault("Uncategorized", 0.0)
         for ln in self.lines:
@@ -47,6 +48,25 @@ class CategorizedBill:
             t.setdefault(ln.category, 0.0)
             t[ln.category] += ln.amount
         return t
+
+    def totals(self) -> Dict[str, float]:
+        """Final totals: any Uncategorized charges are split evenly across the
+        main categories so nothing is left in an "Uncategorized" bucket."""
+        raw = self.raw_totals()
+        uncat = raw.pop("Uncategorized", 0.0)
+        n = len(self.categories)
+        if n > 0 and uncat != 0.0:
+            per_cat = round(uncat / n, 2)
+            # Correct rounding so sum stays exact.
+            remainder = round(uncat - per_cat * n, 2)
+            for i, cat in enumerate(self.categories):
+                raw.setdefault(cat, 0.0)
+                raw[cat] += per_cat
+                if i == 0:
+                    raw[cat] += remainder  # toss leftover penny into first cat
+            # Indicate there was a split
+            raw["_overhead_split"] = uncat  # stash for display (not a real category)
+        return raw
 
     def grand_total(self) -> float:
         return sum(ln.amount for ln in self.lines if ln.amount is not None)
@@ -83,10 +103,8 @@ def export_excel(bill: CategorizedBill, out_path: str) -> str:
 
     row = 6
     totals = bill.totals()
-    all_cats = list(bill.categories)
-    if totals.get("Uncategorized", 0) > 0 and "Uncategorized" not in all_cats:
-        all_cats.append("Uncategorized")
-    for cat in all_cats:
+    overhead = totals.pop("_overhead_split", 0.0)
+    for cat in bill.categories:
         ws.cell(row=row, column=1, value=cat).border = _BORDER
         c = ws.cell(row=row, column=2, value=round(totals.get(cat, 0.0), 2))
         c.number_format = '"$"#,##0.00'
@@ -96,6 +114,9 @@ def export_excel(bill: CategorizedBill, out_path: str) -> str:
     gt = ws.cell(row=row, column=2, value=round(bill.grand_total(), 2))
     gt.font = Font(bold=True)
     gt.number_format = '"$"#,##0.00'
+    if overhead:
+        row += 1
+        ws.cell(row=row, column=1, value=f"  (Incl. ${overhead:,.2f} overhead split ÷ {len(bill.categories)})").font = Font(italic=True, color="808080")
 
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["B"].width = 18
@@ -144,6 +165,94 @@ def export_excel(bill: CategorizedBill, out_path: str) -> str:
     return out_path
 
 
+# ---- AP Phone Line Analysis (auto-generated) -----------------------------
+
+def export_ap_analysis(bill: CategorizedBill, out_path: str) -> str:
+    """Simplified phone-line breakdown for Accounts Payable.
+
+    Columns: Phone | Employee | EE Dept | Category | Amount
+    Sorted by category then amount descending.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Phone Line Analysis"
+
+    headers = ["Phone", "Employee", "EE Dept", "Category", "Amount"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.fill = _HEADER_FILL
+        c.font = _HEADER_FONT
+        c.border = _BORDER
+        c.alignment = Alignment(horizontal="center")
+
+    # Build rows — only lines that have a phone number are relevant here.
+    rows_data = []
+    for ln in bill.lines:
+        # Derive phone from the raw text if it was a phone-based line.
+        phone_str = ""
+        if hasattr(ln, "raw") and ln.raw:
+            import re
+            m = re.search(r"\(\d{3}\)\s*\d{3}[\-\s.]\d{4}", ln.raw)
+            if m:
+                phone_str = m.group(0)
+        rows_data.append((
+            phone_str,
+            ln.matched_name or "",
+            ln.department or "",
+            ln.category,
+            ln.amount,
+        ))
+
+    rows_data.sort(key=lambda r: (r[3], -(r[4] or 0)))
+
+    for i, row in enumerate(rows_data, 2):
+        ws.cell(row=i, column=1, value=row[0]).border = _BORDER
+        ws.cell(row=i, column=2, value=row[1]).border = _BORDER
+        ws.cell(row=i, column=3, value=row[2]).border = _BORDER
+        ws.cell(row=i, column=4, value=row[3]).border = _BORDER
+        ac = ws.cell(row=i, column=5, value=round(row[4], 2) if row[4] is not None else "")
+        ac.number_format = '"$"#,##0.00'
+        ac.border = _BORDER
+
+    # Summary at the bottom
+    last = len(rows_data) + 2
+    ws.cell(row=last, column=3, value="").border = _BORDER
+    ws.cell(row=last, column=4, value="Grand Total").font = Font(bold=True)
+    ws.cell(row=last, column=4).border = _BORDER
+    gt = ws.cell(row=last, column=5, value=round(bill.grand_total(), 2))
+    gt.font = Font(bold=True)
+    gt.number_format = '"$"#,##0.00'
+    gt.border = _BORDER
+
+    # Category subtotals
+    last += 1
+    ws.cell(row=last, column=1, value="").border = _BORDER
+    last += 1
+    ws.cell(row=last, column=1, value="Category Totals").font = Font(bold=True, size=11)
+    totals = bill.totals()
+    overhead = totals.pop("_overhead_split", 0.0)
+    last += 1
+    for cat in bill.categories:
+        ws.cell(row=last, column=4, value=cat).border = _BORDER
+        c = ws.cell(row=last, column=5, value=round(totals.get(cat, 0.0), 2))
+        c.number_format = '"$"#,##0.00'
+        c.font = Font(bold=True)
+        c.border = _BORDER
+        last += 1
+    if overhead:
+        ws.cell(row=last, column=4, value=f"(Incl. ${overhead:,.2f} overhead ÷ {len(bill.categories)})").font = Font(italic=True, color="808080")
+
+    widths = [16, 28, 26, 14, 12]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:E{len(rows_data) + 1}"
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    wb.save(out_path)
+    return out_path
+
+
 # ---- PDF ----------------------------------------------------------------
 
 def export_pdf(bill: CategorizedBill, out_path: str) -> str:
@@ -174,13 +283,13 @@ def export_pdf(bill: CategorizedBill, out_path: str) -> str:
     elements.append(Spacer(1, 0.25 * inch))
 
     totals = bill.totals()
-    all_cats = list(bill.categories)
-    if totals.get("Uncategorized", 0) > 0 and "Uncategorized" not in all_cats:
-        all_cats.append("Uncategorized")
+    overhead = totals.pop("_overhead_split", 0.0)
     data = [["Category", "Total"]]
-    for cat in all_cats:
+    for cat in bill.categories:
         data.append([cat, f"${totals.get(cat, 0.0):,.2f}"])
     data.append(["Grand Total", f"${bill.grand_total():,.2f}"])
+    if overhead:
+        data.append([f"(Incl. ${overhead:,.2f} overhead split ÷ {len(bill.categories)})", ""])
 
     t = Table(data, colWidths=[3.5 * inch, 2 * inch])
     t.setStyle(

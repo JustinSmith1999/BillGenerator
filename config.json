@@ -10,6 +10,8 @@
     "api_version": "60.0"
   },
   "employee_list_path": "data/employees.xlsx",
+  "phone_list_path": "data/line_list.xlsx",
+  "_phone_list_note": "Optional T-Mobile/phone line list. Used to map a phone number on a bill to an employee; the EE list then provides the authoritative department.",
   "employee_name_column": "HR: Employee Name",
   "employee_department_column": "Department",
   "fuzzy_match_threshold": 85,

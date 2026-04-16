@@ -1,5 +1,5 @@
 {
-  "_comment": "Edit this file to change how departments map to the 5 categories. Departments not listed here will be flagged 'Uncategorized'.",
+  "_comment": "Maps both the EE-list departments (primary) and the T-Mobile line-list departments (fallback, when a phone's user isn't in the EE list). Edit any entry to override.",
   "categories": ["Residential", "Commercial", "Service", "Roofing", "Executive"],
   "department_to_category": {
     "Residential Engineering": "Residential",
@@ -24,6 +24,18 @@
     "Service Field": "Service",
     "Service Office": "Service",
     "Roofing": "Roofing",
-    "Executive Office": "Executive"
+    "Executive Office": "Executive",
+
+    "_line_list_fallback_comment": "Below = department names used in the T-Mobile line list, only used when a phone's user isn't found in the EE list.",
+    "Sales": "Residential",
+    "Engineering": "Residential",
+    "Resi": "Residential",
+    "Install": "Residential",
+    "Service": "Service",
+    "Channel Partners": "Commercial",
+    "Commercial Install": "Commercial",
+    "Florida": "Residential",
+    "North Carolina": "Residential",
+    "--": "Residential"
   }
 }

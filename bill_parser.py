@@ -25,6 +25,20 @@ _NAME_RE = re.compile(
     r"(?:[A-Z][a-zA-Z\-']+\s*,\s*[A-Z][a-zA-Z\-']+(?:\s+[A-Z][a-zA-Z\-']+)?)"
     r"|(?:[A-Z][a-zA-Z\-']+(?:\s+[A-Z][a-zA-Z\-']+){1,2})"
 )
+# US phone number — require a recognizable format to avoid matching random
+# 10-digit sequences like promo IDs ("2025022511055"). We accept:
+#   (NNN) NNN-NNNN      canonical bill format
+#   NNN-NNN-NNNN        dashed
+#   NNN.NNN.NNNN        dotted
+# Area code must start with 2-9 per NANP.
+_PHONE_RE = re.compile(
+    r"(?:\(\s*[2-9]\d{2}\s*\)\s*\d{3}[\s\-.]\d{4})"
+    r"|(?:\b[2-9]\d{2}[\s\-.]\d{3}[\s\-.]\d{4}\b)"
+)
+# Line that looks like a T-Mobile per-phone summary row. Example:
+#   "(516) 272-3275 Sunation Solar Syste ms p.55 $40.00 - - $8.00 -$30.00 $7.50 $25.50"
+# We pick the LAST dollar amount as the line total.
+_ALL_AMOUNTS_RE = re.compile(r"-?\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})")
 
 
 @dataclass
@@ -32,6 +46,7 @@ class BillLine:
     raw: str
     name: Optional[str] = None
     amount: Optional[float] = None
+    phone: Optional[str] = None      # 10-digit normalized, if any
     source_row: int = -1
 
 
@@ -51,15 +66,52 @@ def _extract_name(text: str) -> Optional[str]:
     return m.group(0).strip() if m else None
 
 
+def _extract_phone(text: str) -> Optional[str]:
+    m = _PHONE_RE.search(text)
+    if not m:
+        return None
+    digits = re.sub(r"\D", "", m.group(0))
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits if len(digits) == 10 else None
+
+
+def _extract_last_amount(text: str) -> Optional[float]:
+    """For T-Mobile-style rows, the line total is the LAST dollar figure."""
+    matches = _ALL_AMOUNTS_RE.findall(text)
+    if not matches:
+        return None
+    raw = matches[-1].replace("$", "").replace(",", "").replace(" ", "").replace("(", "-").replace(")", "")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def _parse_text_lines(lines: List[str]) -> List[BillLine]:
     out: List[BillLine] = []
+    seen_phones: set = set()  # dedupe — a phone appears in both summary and detail
     for i, raw in enumerate(lines):
         raw = raw.strip()
         if not raw:
             continue
+        phone = _extract_phone(raw)
+        # For phone-bearing lines, keep only the FIRST occurrence of each phone
+        # (that's the per-line total on the summary pages). Later pages break
+        # the same total down into components; summing them would double-count.
+        if phone:
+            if phone in seen_phones:
+                continue
+            seen_phones.add(phone)
+            amount = _extract_last_amount(raw)
+            name = _extract_name(raw)
+            out.append(BillLine(raw=raw, name=name, amount=amount, phone=phone, source_row=i))
+            continue
+        # Non-phone line — use the older name+amount heuristic.
         name = _extract_name(raw)
         amount = _parse_amount(raw)
-        out.append(BillLine(raw=raw, name=name, amount=amount, source_row=i))
+        if name or amount is not None:
+            out.append(BillLine(raw=raw, name=name, amount=amount, source_row=i))
     return out
 
 
